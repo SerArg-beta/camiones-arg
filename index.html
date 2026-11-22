@@ -1,0 +1,174 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+<title>Camiones Argentinos - GPS Pesado</title>
+<link rel="stylesheet" href="https://unpkg.com" />
+<style>
+  * { box-sizing: border-box; margin: 0; padding: 0; font-family: Arial, sans-serif; }
+  body, html { width: 100%; height: 100%; overflow: hidden; background: #1a1a1a; }
+  #mapa { position: absolute; inset: 0; width: 100%; height: 100%; z-index: 1; }
+  .top-bar { position: fixed; top: 12px; left: 12px; right: 12px; z-index: 1000; display: flex; gap: 8px; justify-content: space-between; pointer-events: none; }
+  .pill { pointer-events: auto; background: rgba(20, 25, 35, 0.92); color: #fff; padding: 12px 16px; border-radius: 14px; font-size: 15px; font-weight: bold; box-shadow: 0 4px 12px rgba(0,0,0,0.4); border: 1px solid #334155; cursor: pointer; }
+  .bottom-controls { position: fixed; bottom: 20px; left: 12px; right: 12px; z-index: 1000; display: flex; justify-content: space-between; pointer-events: none; }
+  .btn-float { pointer-events: auto; background: #2563eb; color: white; border: none; padding: 14px 18px; border-radius: 50px; font-size: 16px; font-weight: bold; box-shadow: 0 4px 14px rgba(0,0,0,0.4); cursor: pointer; }
+  .btn-voz { background: #059669; }
+  .banner-aviso { position: fixed; top: 72px; left: 12px; right: 12px; z-index: 1000; background: #fee2e2; color: #991b1b; border-left: 6px solid #dc2626; padding: 14px; border-radius: 10px; font-weight: bold; font-size: 15px; display: none; }
+  .modal { position: fixed; inset: 0; background: rgba(0,0,0,0.75); z-index: 2000; display: none; justify-content: center; align-items: center; padding: 16px; }
+  .modal.abierto { display: flex; }
+  .modal-card { background: #1e293b; color: #f8fafc; width: 100%; max-width: 420px; border-radius: 16px; padding: 20px; }
+  label { display: block; margin-top: 12px; font-size: 14px; color: #cbd5e1; }
+  input, select { width: 100%; padding: 12px; margin-top: 6px; border-radius: 8px; border: 1px solid #475569; background: #0f172a; color: white; font-size: 16px; }
+  .check-row { display: flex; align-items: center; gap: 10px; margin-top: 14px; font-size: 16px; }
+  .check-row input { width: 22px; height: 22px; margin: 0; }
+  .btn-guardar { width: 100%; padding: 15px; margin-top: 20px; background: #22c55e; color: #052e16; border: none; border-radius: 10px; font-size: 18px; font-weight: bold; cursor: pointer; }
+  .btn-cerrar { width: 100%; padding: 12px; margin-top: 8px; background: #334155; color: white; border: none; border-radius: 10px; font-size: 16px; cursor: pointer; }
+</style>
+</head>
+<body>
+
+<div class="top-bar">
+  <div class="pill" onclick="abrirPerfil()">🚛 <span id="txt-camion">Semi (4.1m)</span></div>
+  <div class="pill" id="pill-gps">📡 Buscando GPS...</div>
+</div>
+
+<div id="banner-ruta" class="banner-aviso"></div>
+<div id="mapa"></div>
+
+<div class="bottom-controls">
+  <button class="btn-float btn-voz" onclick="probarAlertaVoz()">🔊 Probar Voz</button>
+  <button class="btn-float" onclick="centrarEnMi()">🎯 Mi Ubicación</button>
+</div>
+
+<div id="modal-perfil" class="modal">
+  <div class="modal-card">
+    <h2 style="color:#38bdf8;margin-bottom:10px;">🚛 Perfil de tu Camión</h2>
+    <label>Modelo (opcional)</label>
+    <input type="text" id="c-modelo" placeholder="Ej: Scania R450">
+    <label>Configuración</label>
+    <select id="c-tipo">
+      <option value="chasis">Chasis simple</option>
+      <option value="semi">Semi / Acoplado</option>
+      <option value="bitren">Bitren (Corredores habilitados)</option>
+      <option value="carreton">Carretón / Carga especial</option>
+    </select>
+    <label>Altura Máxima (metros)</label>
+    <input type="number" id="c-altura" step="0.05" value="4.10">
+    <label>Peso Total (toneladas)</label>
+    <input type="number" id="c-peso" step="1" value="30">
+    <div class="check-row"><input type="checkbox" id="c-hidro"><label style="margin:0;">Lleva Hidrogrúa</label></div>
+    <button class="btn-guardar" onclick="guardarCamion()">💾 Guardar</button>
+    <button class="btn-cerrar" onclick="cerrarPerfil()">Cerrar</button>
+  </div>
+</div>
+
+<script src="https://unpkg.com"></script>
+<script>
+  const RESTRICCIONES_ARG = [
+    { id: 1, nombre: "Paso Bajo Nivel Illia / Arieta (San Justo)", lat: -34.6775, lng: -58.5608, tipo: "puente_bajo", alturaMax: 3.80, detalle: "Altura máxima 3,80m." },
+    { id: 2, nombre: "Túnel Av. de Mayo (Ramos Mejía)", lat: -34.6408, lng: -58.5645, tipo: "puente_bajo", alturaMax: 3.60, detalle: "Altura máxima 3,60m." },
+    { id: 3, nombre: "Paso Bajo Nivel Fasola (Haedo)", lat: -34.6458, lng: -58.5912, tipo: "puente_bajo", alturaMax: 3.70, detalle: "Altura máxima 3,70m." },
+    { id: 4, nombre: "Paseo del Bajo (CABA)", lat: -34.6085, lng: -58.3665, tipo: "corredor", alturaMax: 4.50, detalle: "Corredor exclusivo tránsito pesado." },
+    { id: 5, nombre: "Microcentro Porteño", lat: -34.6037, lng: -58.3816, tipo: "veda_horaria", alturaMax: 4.10, detalle: "Restricción pesada 08:00 a 20:00 hs." }
+  ];
+
+  let mapa, marcadorCamion, posActual = null, seguirCamion = true, alertasCantadas = new Set();
+
+  function obtenerPerfil() {
+    return JSON.parse(localStorage.getItem('camion_arg_perfil') || '{"modelo":"Camión","tipo":"semi","altura":4.10,"peso":30,"hidro":false}');
+  }
+
+  function actualizarPillCamion() {
+    const p = obtenerPerfil();
+    const nombres = { chasis: 'Chasis', semi: 'Semi', bitren: 'BITRÉN', carreton: 'Carretón' };
+    document.getElementById('txt-camion').textContent = `${nombres[p.tipo]} (${p.altura}m${p.hidro ? '+Hidro' : ''})`;
+  }
+
+  function abrirPerfil() {
+    const p = obtenerPerfil();
+    document.getElementById('c-modelo').value = p.modelo;
+    document.getElementById('c-tipo').value = p.tipo;
+    document.getElementById('c-altura').value = p.altura;
+    document.getElementById('c-peso').value = p.peso;
+    document.getElementById('c-hidro').checked = p.hidro;
+    document.getElementById('modal-perfil').classList.add('abierto');
+  }
+
+  function cerrarPerfil() { document.getElementById('modal-perfil').classList.remove('abierto'); }
+
+  function guardarCamion() {
+    const perfil = {
+      modelo: document.getElementById('c-modelo').value.trim() || 'Camión',
+      tipo: document.getElementById('c-tipo').value,
+      altura: parseFloat(document.getElementById('c-altura').value) || 4.10,
+      peso: parseFloat(document.getElementById('c-peso').value) || 30,
+      hidro: document.getElementById('c-hidro').checked
+    };
+    localStorage.setItem('camion_arg_perfil', JSON.stringify(perfil));
+    alertasCantadas.clear();
+    actualizarPillCamion();
+    cerrarPerfil();
+    hablar(`Camión guardado: ${perfil.tipo}, altura ${perfil.altura} metros.`);
+  }
+
+  function hablar(texto) {
+    if (!('speechSynthesis' in window)) return;
+    window.speechSynthesis.cancel();
+    const msg = new SpeechSynthesisUtterance(texto);
+    msg.lang = 'es-AR';
+    window.speechSynthesis.speak(msg);
+  }
+
+  function probarAlertaVoz() {
+    const p = obtenerPerfil();
+    const texto = `Atención chofer. Alerta de prueba para ${p.tipo} de ${p.altura} metros. Puente bajo adelante, desvíe a la derecha.`;
+    const b = document.getElementById('banner-ruta');
+    b.textContent = '⚠️ ' + texto;
+    b.style.display = 'block';
+    setTimeout(() => { b.style.display = 'none'; }, 8000);
+    hablar(texto);
+  }
+
+  function iniciarMapa() {
+    mapa = L.map('mapa', { zoomControl: false }).setView([-34.6775, -58.5608], 14);
+    L.tileLayer('https://{s}://{z}/{x}/{y}{r}.png', { attribution: '© OpenStreetMap' }).addTo(mapa);
+    mapa.on('dragstart', () => { seguirCamion = false; });
+
+    const p = obtenerPerfil();
+    RESTRICCIONES_ARG.forEach(r => {
+      const color = (r.tipo === 'puente_bajo' && p.altura >= r.alturaMax) ? '#dc2626' : '#ca8a04';
+      L.circleMarker([r.lat, r.lng], { radius: 12, fillColor: color, color: '#fff', weight: 2, fillOpacity: 0.9 })
+        .addTo(mapa).bindPopup(`<b>${r.nombre}</b><br>${r.detalle}`);
+    });
+
+    if ('geolocation' in navigator) {
+      navigator.geolocation.watchPosition(
+        (pos) => {
+          posActual = [pos.coords.latitude, pos.coords.longitude];
+          document.getElementById('pill-gps').textContent = '🟢 GPS Activo';
+          if (!marcadorCamion) {
+            marcadorCamion = L.marker(posActual).addTo(mapa);
+            mapa.setView(posActual, 15);
+          } else {
+            marcadorCamion.setLatLng(posActual);
+            if (seguirCamion) mapa.panTo(posActual);
+          }
+        },
+        () => { document.getElementById('pill-gps').textContent = '⚠️ Permitir GPS'; },
+        { enableHighAccuracy: true }
+      );
+    }
+  }
+
+  function centrarEnMi() {
+    seguirCamion = true;
+    if (posActual) mapa.setView(posActual, 16);
+    else alert('Esperando señal GPS...');
+  }
+
+  actualizarPillCamion();
+  window.addEventListener('load', iniciarMapa);
+</script>
+</body>
+</html>
