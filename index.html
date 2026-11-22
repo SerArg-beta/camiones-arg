@@ -1,0 +1,237 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+<title>Camiones Argentinos - GPS Pesado</title>
+<link rel="stylesheet" href="https://unpkg.com" />
+<style>
+  * { box-sizing: border-box; margin: 0; padding: 0; font-family: Arial, sans-serif; }
+  body, html { width: 100%; height: 100%; overflow: hidden; background: #1a1a1a; }
+  #mapa { width: 100%; height: 100%; z-index: 1; }
+  
+  /* Barra superior discreta Zen UI */
+  .top-bar {
+    position: fixed; top: 12px; left: 12px; right: 12px; z-index: 1000;
+    display: flex; gap: 8px; justify-content: space-between; pointer-events: none;
+  }
+  .pill {
+    pointer-events: auto; background: rgba(20, 25, 35, 0.92); color: #fff;
+    padding: 12px 16px; border-radius: 14px; font-size: 15px; font-weight: bold;
+    box-shadow: 0 4px 12px rgba(0,0,0,0.4); border: 1px solid #334155;
+    display: flex; align-items: center; gap: 8px; cursor: pointer;
+  }
+  .pill-alerta { background: #dc2626; border-color: #f87171; animation: pulso 1.5s infinite; }
+  @keyframes pulso { 0% { transform: scale(1); } 50% { transform: scale(1.03); } 100% { transform: scale(1); } }
+
+  /* Botones flotantes inferiores */
+  .bottom-controls {
+    position: fixed; bottom: 20px; left: 12px; right: 12px; z-index: 1000;
+    display: flex; justify-content: space-between; align-items: flex-end; pointer-events: none;
+  }
+  .btn-float {
+    pointer-events: auto; background: #2563eb; color: white; border: none;
+    padding: 14px 18px; border-radius: 50px; font-size: 16px; font-weight: bold;
+    box-shadow: 0 4px 14px rgba(0,0,0,0.4); cursor: pointer;
+  }
+  .btn-voz { background: #059669; }
+
+  /* Cartel de aviso en ruta */
+  .banner-aviso {
+    position: fixed; top: 72px; left: 12px; right: 12px; z-index: 1000;
+    background: #fef08a; color: #854d0e; border-left: 6px solid #ca8a04;
+    padding: 14px; border-radius: 10px; font-weight: bold; font-size: 15px;
+    box-shadow: 0 4px 12px rgba(0,0,0,0.3); display: none;
+  }
+  .banner-peligro { background: #fee2e2; color: #991b1b; border-left: 6px solid #dc2626; }
+
+  /* Modal Perfil del Camión */
+  .modal {
+    position: fixed; inset: 0; background: rgba(0,0,0,0.75); z-index: 2000;
+    display: none; justify-content: center; align-items: center; padding: 16px;
+  }
+  .modal.abierto { display: flex; }
+  .modal-card {
+    background: #1e293b; color: #f8fafc; width: 100%; max-width: 420px;
+    border-radius: 16px; padding: 20px; max-height: 90vh; overflow-y: auto;
+  }
+  .modal-card h2 { margin-bottom: 14px; font-size: 20px; color: #38bdf8; }
+  label { display: block; margin-top: 12px; font-size: 14px; color: #cbd5e1; }
+  input, select {
+    width: 100%; padding: 12px; margin-top: 6px; border-radius: 8px;
+    border: 1px solid #475569; background: #0f172a; color: white; font-size: 16px;
+  }
+  .check-row { display: flex; align-items: center; gap: 10px; margin-top: 14px; font-size: 16px; }
+  .check-row input { width: 22px; height: 22px; margin: 0; }
+  .btn-guardar {
+    width: 100%; padding: 15px; margin-top: 20px; background: #22c55e; color: #052e16;
+    border: none; border-radius: 10px; font-size: 18px; font-weight: bold; cursor: pointer;
+  }
+  .btn-cerrar {
+    width: 100%; padding: 12px; margin-top: 8px; background: #334155; color: white;
+    border: none; border-radius: 10px; font-size: 16px; cursor: pointer;
+  }
+</style>
+</head>
+<body>
+
+<div class="top-bar">
+  <div class="pill" onclick="abrirPerfil()" id="pill-camion">
+    🚛 <span id="txt-camion">Configurar Camión</span>
+  </div>
+  <div class="pill" id="pill-gps">📡 Buscando GPS...</div>
+</div>
+
+<div id="banner-ruta" class="banner-aviso"></div>
+
+<div id="mapa"></div>
+
+<div class="bottom-controls">
+  <button class="btn-float btn-voz" onclick="probarAlertaVoz()">🔊 Probar Voz</button>
+  <button class="btn-float" onclick="centrarEnMi()">🎯 Mi Ubicación</button>
+</div>
+
+<!-- MODAL CONFIGURACIÓN DE CAMIÓN (CARGA ÚNICA) -->
+<div id="modal-perfil" class="modal">
+  <div class="modal-card">
+    <h2>🚛 Perfil de tu Camión</h2>
+    <p style="font-size:13px; color:#94a3b8;">Se guarda una sola vez. La app audita puentes y rutas según estos datos.</p>
+    
+    <label>Nombre / Modelo (opcional)</label>
+    <input type="text" id="c-modelo" placeholder="Ej: Scania R450 / Mercedes 1620">
+
+    <label>Configuración del Equipo</label>
+    <select id="c-tipo">
+      <option value="chasis">Chasis simple / Balancín</option>
+      <option value="semi">Semi / Acoplado estándar</option>
+      <option value="bitren">Bitren (Solo corredores habilitados)</option>
+      <option value="carreton">Carretón / Carga especial</option>
+    </select>
+
+    <label>Altura Máxima Total (metros)</label>
+    <input type="number" id="c-altura" step="0.05" value="4.10" placeholder="Ej: 4.10">
+
+    <label>Peso Bruto Total (toneladas)</label>
+    <input type="number" id="c-peso" step="1" value="30" placeholder="Ej: 45">
+
+    <div class="check-row">
+      <input type="checkbox" id="c-hidro">
+      <label style="margin:0;">Lleva Hidrogrúa (pluma plegada)</label>
+    </div>
+
+    <div class="check-row">
+      <input type="checkbox" id="c-peligrosa">
+      <label style="margin:0;">Carga Peligrosa (requiere permiso especial)</label>
+    </div>
+
+    <button class="btn-guardar" onclick="guardarCamion()">💾 Guardar y Aplicar</button>
+    <button class="btn-cerrar" onclick="cerrarPerfil()">Cerrar</button>
+  </div>
+</div>
+
+<script src="https://unpkg.com"></script>
+<script>
+  // ==================== 1. BASE DE DATOS INICIAL DE RESTRICCIONES ARGENTINA ====================
+  const RESTRICCIONES_ARG = [
+    {
+      id: 1, nombre: "Paso Bajo Nivel Av. Illia / Arieta (San Justo)",
+      lat: -34.6775, lng: -58.5608, tipo: "puente_bajo", alturaMax: 3.80,
+      detalle: "Altura máxima 3,80m. Prohibido tránsito pesado alto."
+    },
+    {
+      id: 2, nombre: "Túnel Av. de Mayo / Vías Sarmiento (Ramos Mejía)",
+      lat: -34.6408, lng: -58.5645, tipo: "puente_bajo", alturaMax: 3.60,
+      detalle: "Altura máxima 3,60m. Desviar por paso a nivel habilitado."
+    },
+    {
+      id: 3, nombre: "Paso Bajo Nivel Fasola / Pueyrredón (Haedo)",
+      lat: -34.6458, lng: -58.5912, tipo: "puente_bajo", alturaMax: 3.70,
+      detalle: "Altura máxima 3,70m. Riesgo de impacto de caja o hidrogrúa."
+    },
+    {
+      id: 4, nombre: "Acceso Paseo del Bajo (CABA - Corredor Pesado)",
+      lat: -34.6085, lng: -58.3665, tipo: "corredor", alturaMax: 4.50,
+      detalle: "Corredor exclusivo tránsito pesado y micros. TelePASE obligatorio."
+    },
+    {
+      id: 5, nombre: "Microcentro Porteño (Zona Restringida)",
+      lat: -34.6037, lng: -58.3816, tipo: "veda_horaria", alturaMax: 4.10,
+      detalle: "Restricción de tránsito pesado de 08:00 a 20:00 hs. Solo con permiso."
+    }
+  ];
+
+  // ==================== 2. ESTADO DEL SISTEMA Y PERFIL ====================
+  let mapa, marcadorCamion, posActual = null, seguirCamion = true;
+  let alertasCantadas = new Set();
+
+  function obtenerPerfil() {
+    return JSON.parse(localStorage.getItem('camion_arg_perfil') || JSON.stringify({
+      modelo: 'Camión Estándar', tipo: 'semi', altura: 4.10, peso: 30, hidro: false, peligrosa: false
+    }));
+  }
+
+  function actualizarPillCamion() {
+    const p = obtenerPerfil();
+    const extra = p.hidro ? ' + Hidro' : '';
+    const nombresTipo = { chasis: 'Chasis', semi: 'Semi', bitren: 'BITRÉN', carreton: 'Carretón' };
+    document.getElementById('txt-camion').textContent = `${nombresTipo[p.tipo]} (${p.altura}m${extra})`;
+  }
+
+  function abrirPerfil() {
+    const p = obtenerPerfil();
+    document.getElementById('c-modelo').value = p.modelo;
+    document.getElementById('c-tipo').value = p.tipo;
+    document.getElementById('c-altura').value = p.altura;
+    document.getElementById('c-peso').value = p.peso;
+    document.getElementById('c-hidro').checked = p.hidro;
+    document.getElementById('c-peligrosa').checked = p.peligrosa;
+    document.getElementById('modal-perfil').classList.add('abierto');
+  }
+
+  function cerrarPerfil() {
+    document.getElementById('modal-perfil').classList.remove('abierto');
+  }
+
+  function guardarCamion() {
+    const perfil = {
+      modelo: document.getElementById('c-modelo').value.trim() || 'Mi Camión',
+      tipo: document.getElementById('c-tipo').value,
+      altura: parseFloat(document.getElementById('c-altura').value) || 4.10,
+      peso: parseFloat(document.getElementById('c-peso').value) || 30,
+      hidro: document.getElementById('c-hidro').checked,
+      peligrosa: document.getElementById('c-peligrosa').checked
+    };
+    localStorage.setItem('camion_arg_perfil', JSON.stringify(perfil));
+    alertasCantadas.clear();
+    actualizarPillCamion();
+    cerrarPerfil();
+    dibujarRestricciones();
+    hablar(`Perfil actualizado: ${perfil.tipo}, altura ${perfil.altura} metros.`);
+  }
+
+  // ==================== 3. SÍNTESIS DE VOZ (HANDS-FREE) ====================
+  function hablar(texto) {
+    if (!('speechSynthesis' in window)) return;
+    window.speechSynthesis.cancel();
+    const msg = new SpeechSynthesisUtterance(texto);
+    msg.lang = 'es-AR';
+    msg.rate = 1.05;
+    window.speechSynthesis.speak(msg);
+  }
+
+  function probarAlertaVoz() {
+    const p = obtenerPerfil();
+    const texto = `Atención chofer. Sistema activo para ${p.tipo} de ${p.altura} metros de altura. Alerta de prueba: puente bajo a 500 metros, altura máxima 3 metros 80. Desvíe a la derecha.`;
+    mostrarBanner(`⚠️ PRUEBA DE AUDITORÍA: ${texto}`, true);
+    hablar(texto);
+  }
+
+  function mostrarBanner(texto, esPeligro = false) {
+    const b = document.getElementById('banner-ruta');
+    b.textContent = texto;
+    b.className = esPeligro ? 'banner-aviso banner-peligro' : 'banner-aviso';
+    b.style.display = 'block';
+    setTimeout(() => { b.style.display = 'none'; }, 9000);
+  }
+
+  
